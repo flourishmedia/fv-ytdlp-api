@@ -71,7 +71,7 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         """Health check endpoint."""
         self._send_json({
             "service": "floview-ytdlp-api",
-            "version": "1.2.0",
+            "version": "1.3.0",
             "status": "ok",
             "cookies": "loaded" if COOKIE_FILE else "not_set",
         })
