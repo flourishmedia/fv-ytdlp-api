@@ -94,20 +94,11 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         # Add extractor args if provided
         cmd.extend(extractor_args)
 
-        # Format selection — use flexible format strings
-        # Don't specify itag numbers directly as they may not exist for all videos.
-        # "bestvideo+bestaudio" merges video+audio. "best" is progressive (single file).
-        # The trailing "/best" ensures we always fall back to something.
+        # Format selection — keep it simple.
+        # No format flag = yt-dlp picks best available automatically (usually bestvideo+bestaudio).
+        # For audio-only, explicitly request best audio.
         if audio_only:
-            fmt = "bestaudio/best"
-        else:
-            if quality == "360p":
-                fmt = "worstvideo+bestaudio/worst/best"
-            elif quality == "1080p":
-                fmt = "bestvideo+bestaudio/best"
-            else:  # 720p default
-                fmt = "bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best"
-        cmd += ["-f", fmt]
+            cmd += ["-f", "ba/b"]
 
         cmd.append(url)
 
