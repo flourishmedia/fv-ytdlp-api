@@ -57,6 +57,13 @@ def _init_cookies():
     # Fix: Render env vars may convert newlines to spaces or literal \n
     cookies = cookies.replace("\\n", "\n")
     
+    # Fix: Netscape cookie format column 2 is "include_subdomains" (TRUE for .youtube.com)
+    # Some exports put httpOnly in column 2 instead, which causes "AssertionError"
+    # We need to ensure .youtube.com entries have TRUE in column 2
+    # This regex fixes: .youtube.com\tFALSE → .youtube.com\tTRUE
+    import re as _re
+    cookies = _re.sub(r'(\.youtube\.com)\t(FALSE)\t', r'\1\tTRUE\t', cookies)
+    
     # Check if it's JSON format [{name:..., value:...}, ...]
     if cookies.startswith("["):
         try:
@@ -72,7 +79,10 @@ def _init_cookies():
                 name = c.get("name", "")
                 value = c.get("value", "")
                 http_only = "TRUE" if c.get("httpOnly", True) else "FALSE"
-                lines.append(f"{domain}\t{http_only}\t{path}\t{secure}\t{expiry}\t{name}\t{value}")
+                # Netscape format column 2 is "include_subdomains", NOT httpOnly
+                # It should be TRUE if domain starts with "." (meaning subdomains included)
+                include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
+                lines.append(f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expiry}\t{name}\t{value}")
             cookies = "\n".join(lines)
         except json.JSONDecodeError:
             pass  # Not JSON, treat as Netscape format
