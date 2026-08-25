@@ -3,12 +3,19 @@
 Minimal yt-dlp API server for FloView.
 Returns direct video URLs for any YouTube video.
 Deploy on Render.com free tier (Docker with deno).
+
+IMPORTANT: Set YOUTUBE_COOKIES env var with your YouTube cookies
+to bypass bot detection. Without cookies, YouTube blocks datacenter IPs.
+Export cookies using browser extension "Get cookies.txt LOCALLY"
+and paste the content as the YOUTUBE_COOKIES env var.
 """
 
 import json
+import os
 import subprocess
 import sys
 import re
+import tempfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # CORS - allow FloView origins (and any *.floview.pages.dev subdomain)
@@ -18,22 +25,23 @@ ALLOWED_ORIGINS = [
     "http://localhost:3000",
 ]
 
-# yt-dlp client strategies to try in order.
-# Each uses a different YouTube API client which may or may not be blocked.
-CLIENT_STRATEGIES = [
-    # Strategy 1: WEB client with PO token (most reliable if PO token available)
-    ["--extractor-args", "youtube:player_client=web"],
-    # Strategy 2: MWEB client (mobile web — often less restricted)
-    ["--extractor-args", "youtube:player_client=mweb"],
-    # Strategy 3: TV client (smart TV — different IP reputation checks)
-    ["--extractor-args", "youtube:player_client=tv"],
-    # Strategy 4: IOS client (often works from datacenter IPs)
-    ["--extractor-args", "youtube:player_client=ios"],
-    # Strategy 5: Android client
-    ["--extractor-args", "youtube:player_client=android"],
-    # Strategy 6: Default (no specific client — yt-dlp picks best)
-    [],
-]
+# Cookie file path (set from YOUTUBE_COOKIES env var)
+COOKIE_FILE = None
+
+def _init_cookies():
+    """Initialize cookie file from YOUTUBE_COOKIES env var."""
+    global COOKIE_FILE
+    cookies = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    if not cookies:
+        return
+    # Write cookies to a temp file that yt-dlp can read
+    COOKIE_FILE = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+    COOKIE_FILE.write(cookies)
+    COOKIE_FILE.flush()
+    # Don't close — keep the file around for yt-dlp to read
+    print(f"[yt-dlp-api] Cookies loaded ({len(cookies)} bytes)")
+
+_init_cookies()
 
 
 class YtdlpHandler(BaseHTTPRequestHandler):
@@ -63,8 +71,9 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         """Health check endpoint."""
         self._send_json({
             "service": "floview-ytdlp-api",
-            "version": "1.1.0",
+            "version": "1.2.0",
             "status": "ok",
+            "cookies": "loaded" if COOKIE_FILE else "not_set",
         })
 
     def _try_ytdlp(self, url, quality, audio_only, extractor_args):
@@ -77,6 +86,10 @@ class YtdlpHandler(BaseHTTPRequestHandler):
             "--dump-json",
             "--no-download",
         ]
+
+        # Add cookies if available
+        if COOKIE_FILE:
+            cmd += ["--cookies", COOKIE_FILE.name]
 
         # Add extractor args if provided
         cmd.extend(extractor_args)
@@ -136,33 +149,41 @@ class YtdlpHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Only YouTube URLs are supported"}, 400)
             return
 
-        # Extract video ID for the response
+        # Extract video ID
         vid_match = re.search(r'(?:v=|youtu\.be/|shorts/|live/)([a-zA-Z0-9_-]{11})', url)
         video_id = vid_match.group(1) if vid_match else ""
 
         try:
-            # Try each client strategy until one works
+            # Client strategies to try in order
+            # If cookies are set, the first strategy usually works
+            strategies = [
+                ("web", ["--extractor-args", "youtube:player_client=web"]),
+                ("mweb", ["--extractor-args", "youtube:player_client=mweb"]),
+                ("tv", ["--extractor-args", "youtube:player_client=tv"]),
+                ("ios", ["--extractor-args", "youtube:player_client=ios"]),
+                ("android", ["--extractor-args", "youtube:player_client=android"]),
+                ("default", []),
+            ]
+
             last_error = ""
             data = None
             strategy_used = ""
 
-            for i, extractor_args in enumerate(CLIENT_STRATEGIES):
-                strategy_name = extractor_args[-1] if extractor_args else "default"
-                sys.stderr.write(f"[yt-dlp-api] Trying strategy {i+1}/{len(CLIENT_STRATEGIES)}: {strategy_name}\n")
-
+            for name, extractor_args in strategies:
+                sys.stderr.write(f"[yt-dlp-api] Trying {name}...\n")
                 data, error = self._try_ytdlp(url, quality, audio_only, extractor_args)
 
                 if data is not None:
-                    strategy_used = strategy_name
-                    sys.stderr.write(f"[yt-dlp-api] Strategy {strategy_name} succeeded!\n")
+                    strategy_used = name
+                    sys.stderr.write(f"[yt-dlp-api] {name} succeeded!\n")
                     break
 
                 last_error = error
-                # If it's not a bot detection error, don't try more strategies
+                # Only retry on bot detection errors
                 if "Sign in to confirm" not in error and "bot" not in error.lower():
                     break
 
-                sys.stderr.write(f"[yt-dlp-api] Strategy {strategy_name} failed: {error[:100]}\n")
+                sys.stderr.write(f"[yt-dlp-api] {name} failed: {error[:100]}\n")
 
             if data is None:
                 if "Sign in to confirm" in last_error or "bot" in last_error.lower():
@@ -235,6 +256,7 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     server = HTTPServer(("0.0.0.0", port), YtdlpHandler)
     print(f"[yt-dlp-api] Running on port {port}")
+    print(f"[yt-dlp-api] Cookies: {'loaded' if COOKIE_FILE else 'not set (set YOUTUBE_COOKIES env var)'}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
