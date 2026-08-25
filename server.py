@@ -68,7 +68,23 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        """Health check endpoint."""
+        """Health check and debug endpoint."""
+        path = self.path.split('?')[0]
+        if path == '/debug':
+            # Debug: list available formats for a video
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            vid = qs.get('id', [''])[0]
+            if not vid:
+                self._send_json({"error": "Add ?id=VIDEO_ID to debug"}, 400)
+                return
+            cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", "--list-formats"]
+            if COOKIE_FILE:
+                cmd += ["--cookies", COOKIE_FILE.name]
+            cmd.append(f"https://www.youtube.com/watch?v={vid}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            self._send_json({"stdout": result.stdout[-2000:], "stderr": result.stderr[-500:], "code": result.returncode})
+            return
         self._send_json({
             "service": "floview-ytdlp-api",
             "version": "1.3.0",
