@@ -29,17 +29,64 @@ ALLOWED_ORIGINS = [
 COOKIE_FILE = None
 
 def _init_cookies():
-    """Initialize cookie file from YOUTUBE_COOKIES env var."""
+    """Initialize cookie file from YOUTUBE_COOKIES env var.
+    
+    Supports three formats:
+    1. Base64-encoded Netscape cookies.txt (RECOMMENDED for Render — survives env var pasting)
+    2. JSON format with cookie name-value pairs
+    3. Raw Netscape cookies.txt content
+    
+    For Render: encode your cookies file with `base64 cookies.txt` and paste the result.
+    """
     global COOKIE_FILE
     cookies = os.environ.get("YOUTUBE_COOKIES", "").strip()
     if not cookies:
         return
+    
+    # Try base64 decode first (most reliable for Render env vars)
+    import base64
+    try:
+        decoded = base64.b64decode(cookies).decode('utf-8')
+        # Check if it looks like valid cookies
+        if '.youtube.com' in decoded or '# Netscape' in decoded:
+            cookies = decoded
+            print(f"[yt-dlp-api] Decoded base64 cookies successfully")
+    except Exception:
+        pass  # Not base64, try other formats
+    
+    # Fix: Render env vars may convert newlines to spaces or literal \n
+    cookies = cookies.replace("\\n", "\n")
+    
+    # Check if it's JSON format [{name:..., value:...}, ...]
+    if cookies.startswith("["):
+        try:
+            cookie_list = json.loads(cookies)
+            lines = ["# Netscape HTTP Cookie File"]
+            for c in cookie_list:
+                domain = c.get("domain", ".youtube.com")
+                path = c.get("path", "/")
+                secure = "TRUE" if c.get("secure", True) else "FALSE"
+                expiry = c.get("expirationDate", c.get("expiry", 0))
+                if isinstance(expiry, float):
+                    expiry = int(expiry)
+                name = c.get("name", "")
+                value = c.get("value", "")
+                http_only = "TRUE" if c.get("httpOnly", True) else "FALSE"
+                lines.append(f"{domain}\t{http_only}\t{path}\t{secure}\t{expiry}\t{name}\t{value}")
+            cookies = "\n".join(lines)
+        except json.JSONDecodeError:
+            pass  # Not JSON, treat as Netscape format
+    
+    # Ensure the file starts with the Netscape header
+    if not cookies.startswith("#"):
+        cookies = "# Netscape HTTP Cookie File\n" + cookies
+    
     # Write cookies to a temp file that yt-dlp can read
     COOKIE_FILE = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
     COOKIE_FILE.write(cookies)
     COOKIE_FILE.flush()
-    # Don't close — keep the file around for yt-dlp to read
-    print(f"[yt-dlp-api] Cookies loaded ({len(cookies)} bytes)")
+    line_count = cookies.count("\n")
+    print(f"[yt-dlp-api] Cookies loaded ({len(cookies)} bytes, {line_count} lines)")
 
 _init_cookies()
 
@@ -85,11 +132,23 @@ class YtdlpHandler(BaseHTTPRequestHandler):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             self._send_json({"stdout": result.stdout[-2000:], "stderr": result.stderr[-500:], "code": result.returncode})
             return
+        
+        # Check deno availability
+        deno_available = False
+        try:
+            r = subprocess.run(["deno", "--version"], capture_output=True, text=True, timeout=5)
+            deno_available = r.returncode == 0
+            deno_version = r.stdout.strip()[:50] if deno_available else ""
+        except Exception:
+            deno_version = ""
+        
         self._send_json({
             "service": "floview-ytdlp-api",
-            "version": "1.3.0",
+            "version": "1.3.1",
             "status": "ok",
             "cookies": "loaded" if COOKIE_FILE else "not_set",
+            "deno": deno_available,
+            "deno_version": deno_version,
         })
 
     def _try_ytdlp(self, url, quality, audio_only, extractor_args):
