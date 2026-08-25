@@ -18,6 +18,24 @@ ALLOWED_ORIGINS = [
     "http://localhost:3000",
 ]
 
+# yt-dlp client strategies to try in order.
+# Each uses a different YouTube API client which may or may not be blocked.
+CLIENT_STRATEGIES = [
+    # Strategy 1: WEB client with PO token (most reliable if PO token available)
+    ["--extractor-args", "youtube:player_client=web"],
+    # Strategy 2: MWEB client (mobile web — often less restricted)
+    ["--extractor-args", "youtube:player_client=mweb"],
+    # Strategy 3: TV client (smart TV — different IP reputation checks)
+    ["--extractor-args", "youtube:player_client=tv"],
+    # Strategy 4: IOS client (often works from datacenter IPs)
+    ["--extractor-args", "youtube:player_client=ios"],
+    # Strategy 5: Android client
+    ["--extractor-args", "youtube:player_client=android"],
+    # Strategy 6: Default (no specific client — yt-dlp picks best)
+    [],
+]
+
+
 class YtdlpHandler(BaseHTTPRequestHandler):
     def _send_cors(self):
         origin = self.headers.get("Origin", "")
@@ -45,9 +63,50 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         """Health check endpoint."""
         self._send_json({
             "service": "floview-ytdlp-api",
-            "version": "1.0.0",
+            "version": "1.1.0",
             "status": "ok",
         })
+
+    def _try_ytdlp(self, url, quality, audio_only, extractor_args):
+        """Run yt-dlp with specific arguments. Returns (data_dict, error_msg)."""
+        cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--quiet",
+            "--dump-json",
+            "--no-download",
+        ]
+
+        # Add extractor args if provided
+        cmd.extend(extractor_args)
+
+        # Format selection
+        if audio_only:
+            cmd += ["-f", "bestaudio/best"]
+        else:
+            if quality == "360p":
+                cmd += ["-f", "18/bestvideo+bestaudio/best"]
+            elif quality == "1080p":
+                cmd += ["-f", "22/bestvideo+bestaudio/best"]
+            else:  # 720p default
+                cmd += ["-f", "22/18/bestvideo+bestaudio/best"]
+
+        cmd.append(url)
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() or "yt-dlp failed"
+            return None, error_msg
+
+        data = json.loads(result.stdout)
+        return data, None
 
     def do_POST(self):
         """Get direct video URL from a YouTube URL using yt-dlp."""
@@ -82,52 +141,39 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         video_id = vid_match.group(1) if vid_match else ""
 
         try:
-            # Build yt-dlp command
-            cmd = [
-                sys.executable, "-m", "yt_dlp",
-                "--no-warnings",
-                "--no-check-certificates",
-                "--quiet",
-                "--dump-json",
-                "--no-download",
-            ]
+            # Try each client strategy until one works
+            last_error = ""
+            data = None
+            strategy_used = ""
 
-            # Format selection
-            if audio_only:
-                cmd += ["-f", "bestaudio/best"]
-            else:
-                # Prefer progressive (direct MP4 with audio), then best adaptive
-                if quality == "360p":
-                    cmd += ["-f", "18/bestvideo+bestaudio/best"]
-                elif quality == "1080p":
-                    cmd += ["-f", "22/bestvideo+bestaudio/best"]
-                else:  # 720p default
-                    cmd += ["-f", "22/18/bestvideo+bestaudio/best"]
+            for i, extractor_args in enumerate(CLIENT_STRATEGIES):
+                strategy_name = extractor_args[-1] if extractor_args else "default"
+                sys.stderr.write(f"[yt-dlp-api] Trying strategy {i+1}/{len(CLIENT_STRATEGIES)}: {strategy_name}\n")
 
-            cmd.append(url)
+                data, error = self._try_ytdlp(url, quality, audio_only, extractor_args)
 
-            # Run yt-dlp
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+                if data is not None:
+                    strategy_used = strategy_name
+                    sys.stderr.write(f"[yt-dlp-api] Strategy {strategy_name} succeeded!\n")
+                    break
 
-            if result.returncode != 0:
-                error_msg = result.stderr.strip() or "yt-dlp failed"
-                if "Sign in to confirm" in error_msg or "bot" in error_msg.lower():
+                last_error = error
+                # If it's not a bot detection error, don't try more strategies
+                if "Sign in to confirm" not in error and "bot" not in error.lower():
+                    break
+
+                sys.stderr.write(f"[yt-dlp-api] Strategy {strategy_name} failed: {error[:100]}\n")
+
+            if data is None:
+                if "Sign in to confirm" in last_error or "bot" in last_error.lower():
                     self._send_json({"error": "YouTube is temporarily blocking requests. Try again later."}, 503)
-                elif "Video unavailable" in error_msg:
+                elif "Video unavailable" in last_error:
                     self._send_json({"error": "This video is unavailable."}, 404)
                 else:
-                    self._send_json({"error": f"Could not get video info: {error_msg[:200]}"}, 500)
+                    self._send_json({"error": f"Could not get video info: {last_error[:200]}"}, 500)
                 return
 
-            data = json.loads(result.stdout)
-
             # Extract the direct URL
-            # For merged formats (bestvideo+bestaudio), yt-dlp returns requested_formats
             formats = data.get("requested_formats") or []
             video_url = ""
             audio_url = ""
@@ -142,10 +188,9 @@ class YtdlpHandler(BaseHTTPRequestHandler):
                     if is_audio and not audio_url:
                         audio_url = furl
             else:
-                # Single format (progressive)
                 video_url = data.get("url", "")
 
-            # Determine if we got direct URLs or HLS manifests
+            # Determine URL type
             is_hls = "manifest.googlevideo.com" in video_url or ".m3u8" in video_url
             is_direct = "googlevideo.com/videoplayback" in video_url
 
@@ -169,7 +214,8 @@ class YtdlpHandler(BaseHTTPRequestHandler):
                 "mimeType": data.get("ext", "mp4"),
                 "isHls": is_hls,
                 "isDirect": is_direct,
-                "proxyable": is_direct,  # Direct URLs can be proxied through /api/stream
+                "proxyable": is_direct,
+                "strategy": strategy_used,
             })
 
         except subprocess.TimeoutExpired:
