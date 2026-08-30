@@ -154,7 +154,7 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         
         self._send_json({
             "service": "floview-ytdlp-api",
-            "version": "1.3.1",
+            "version": "1.5.2",
             "status": "ok",
             "cookies": "loaded" if COOKIE_FILE else "not_set",
             "deno": deno_available,
