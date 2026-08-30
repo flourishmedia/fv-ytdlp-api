@@ -190,20 +190,15 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         # Add extractor args if provided
         cmd.extend(extractor_args)
 
-        # Format selection — yt-dlp needs --merge-output-format for merging
-        # video+audio. But we're not downloading — we're just getting URLs.
-        # Use format strings that work with --dump-json:
-        # 1. Try pre-merged progressive formats (best for direct download)
-        # 2. Fall back to best single stream (video only, no merge needed)
+        # Format selection — DON'T use -f flag for video downloads!
+        # Without -f, yt-dlp automatically picks the best format.
+        # With --merge-output-format mp4, it merges video+audio into mp4.
+        # The "format not available" error only happens with -f selectors
+        # that don't match the formats available from the VISIONOS client.
         if audio_only:
             cmd += ["-f", "ba/b"]
         else:
-            if quality == "360p":
-                cmd += ["-f", "b[height<=480]/bv[height<=480]/bv+ba/b"]
-            elif quality == "1080p":
-                cmd += ["-f", "b[height<=1080]/bv[height<=1080]/bv+ba/b"]
-            else:  # 720p default
-                cmd += ["-f", "b[height<=720]/bv[height<=720]/bv+ba/b"]
+            cmd += ["--merge-output-format", "mp4"]
 
         cmd.append(url)
 
