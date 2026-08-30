@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install deno (required by yt-dlp for n-parameter decryption)
-# Must install AFTER curl and unzip are available
 RUN curl -fsSL https://deno.land/install.sh | sh
 ENV PATH="/root/.deno/bin:${PATH}"
 
@@ -19,9 +18,14 @@ RUN deno --version
 RUN pip install --no-cache-dir yt-dlp
 
 WORKDIR /app
-COPY server.py .
+
+# KEY FIX: Download server.py from GitHub instead of COPYing it.
+# This bypasses Docker's COPY layer cache, which was causing Render
+# to serve stale server.py files even after git pushes.
+# The GITHUB_SHA arg ensures this layer never caches.
+ARG GITHUB_SHA=latest
+RUN curl -sL "https://raw.githubusercontent.com/flourishmedia/fv-ytdlp-api/master/server.py" -o server.py
 
 EXPOSE 8080
 
 CMD ["python", "server.py", "8080"]
-# Build Sun, Aug 30, 2026  9:49:57 PM
