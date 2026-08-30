@@ -19,12 +19,10 @@ RUN pip install --no-cache-dir yt-dlp
 
 WORKDIR /app
 
-# KEY FIX: Download server.py from GitHub instead of COPYing it.
-# This bypasses Docker's COPY layer cache, which was causing Render
-# to serve stale server.py files even after git pushes.
-# The GITHUB_SHA arg ensures this layer never caches.
-ARG GITHUB_SHA=latest
-RUN curl -sL "https://raw.githubusercontent.com/flourishmedia/fv-ytdlp-api/master/server.py" -o server.py
+# Copy server.py into the image (standard Docker approach)
+# To force Render to rebuild this layer after code changes,
+# do a Manual Deploy with "Clear build cache"
+COPY server.py .
 
 EXPOSE 8080
 
