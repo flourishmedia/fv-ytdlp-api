@@ -163,7 +163,7 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         
         self._send_json({
             "service": "floview-ytdlp-api",
-            "version": "1.7.0",
+            "version": "1.7.1",
             "status": "ok",
             "cookies": "loaded" if COOKIE_FILE else "not_set",
             "deno": deno_available,
@@ -274,12 +274,13 @@ class YtdlpHandler(BaseHTTPRequestHandler):
                     break
 
                 last_error = error
-                # Retry on bot detection AND format errors — different clients
-                # return different formats, so the next client might work
+                # Retry on bot detection, format errors, and page reload errors
+                # Different clients return different formats, so the next might work
                 should_retry = (
                     "Sign in to confirm" in error or
                     "bot" in error.lower() or
-                    "format is not available" in error
+                    "format is not available" in error or
+                    "page needs to be reloaded" in error
                 )
                 if not should_retry:
                     break
