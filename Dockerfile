@@ -1,14 +1,10 @@
 FROM python:3.12-slim
 
-# Install ffmpeg and curl
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    curl \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
+# Install ffmpeg (REQUIRED by yt-dlp for merging video+audio streams)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
-# Install deno (required by yt-dlp for n-parameter decryption)
-RUN curl -fsSL https://deno.land/install.sh | sh || true
+# Install deno (for yt-dlp n-parameter decryption)
+RUN curl -fsSL https://deno.land/install.sh | sh 2>/dev/null || true
 ENV PATH="/root/.deno/bin:${PATH}"
 
 # Install yt-dlp
