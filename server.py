@@ -179,20 +179,20 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         # Add extractor args if provided
         cmd.extend(extractor_args)
 
-        # Format selection — use explicit format strings
-        # Without a format flag, yt-dlp tries to merge streams which can fail
-        # We need to pick a specific format that exists
+        # Format selection — yt-dlp needs --merge-output-format for merging
+        # video+audio. But we're not downloading — we're just getting URLs.
+        # Use format strings that work with --dump-json:
+        # 1. Try pre-merged progressive formats (best for direct download)
+        # 2. Fall back to best single stream (video only, no merge needed)
         if audio_only:
             cmd += ["-f", "ba/b"]
         else:
-            # Try progressive (pre-merged video+audio) first, then adaptive
-            # The /best fallback ensures something is always selected
             if quality == "360p":
-                cmd += ["-f", "bv*[height<=480]+ba/b[height<=480]/bv*[height<=480]+ba/b"]
+                cmd += ["-f", "b[height<=480]/bv[height<=480]/bv+ba/b"]
             elif quality == "1080p":
-                cmd += ["-f", "bv*[height<=1080]+ba/b[height<=1080]/bv+ba/b"]
+                cmd += ["-f", "b[height<=1080]/bv[height<=1080]/bv+ba/b"]
             else:  # 720p default
-                cmd += ["-f", "bv*[height<=720]+ba/b[height<=720]/bv+ba/b"]
+                cmd += ["-f", "b[height<=720]/bv[height<=720]/bv+ba/b"]
 
         cmd.append(url)
 
