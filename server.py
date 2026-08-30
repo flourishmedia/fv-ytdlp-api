@@ -152,6 +152,15 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         except Exception:
             deno_version = ""
         
+        # Check ffmpeg availability
+        ffmpeg_available = False
+        try:
+            r = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+            ffmpeg_available = r.returncode == 0
+            ffmpeg_version = r.stdout.strip()[:50] if ffmpeg_available else ""
+        except Exception:
+            ffmpeg_version = ""
+        
         self._send_json({
             "service": "floview-ytdlp-api",
             "version": "1.5.2",
@@ -159,6 +168,8 @@ class YtdlpHandler(BaseHTTPRequestHandler):
             "cookies": "loaded" if COOKIE_FILE else "not_set",
             "deno": deno_available,
             "deno_version": deno_version,
+            "ffmpeg": ffmpeg_available,
+            "ffmpeg_version": ffmpeg_version,
         })
 
     def _try_ytdlp(self, url, quality, audio_only, extractor_args):
