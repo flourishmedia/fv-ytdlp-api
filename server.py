@@ -126,6 +126,27 @@ class YtdlpHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Health check and debug endpoint."""
+
+        # FETCH COMMENTS
+        parsed_path = self.path.split('?')[0]
+        if parsed_path == "/comment":
+            qs = self.path.split("?")[1] if "?" in self.path else ""
+            video_id = None
+            for part in qs.split("&"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    if k == "videoId":
+                        video_id = v
+            try:
+                if video_id:
+                    res = CommentHandler.get_comments(video_id)
+                    self._send_json({"comments": res}, 200)
+                else:
+                    self._send_json({"error": "videoId required"}, 400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
         path = self.path.split('?')[0]
         if path == '/debug':
             # Debug: list available formats for a video
@@ -217,6 +238,30 @@ class YtdlpHandler(BaseHTTPRequestHandler):
         return data, None
 
     def do_POST(self):
+
+        # COMMENT ROUTE (only signed-in users)
+        if path == "/comment" or path.startswith("/comment"):
+            auth = self.headers.get("Cookie", "") + self.headers.get("Authorization", "")
+            is_signed = "floview-auth" in auth.lower() or "authorization" in auth.lower()
+            if not is_signed:
+                self._send_json({"error": "Sign in required"}, 401)
+                return
+            try:
+                cl = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(cl).decode("utf-8") if cl > 0 else "{}"
+                data = json.loads(body)
+                video_id = data.get("videoId")
+                text = data.get("text", "").strip()
+                user = data.get("user", "Anonymous")
+                if video_id and text:
+                    CommentHandler.save_comment(video_id, text, user)
+                    self._send_json({"ok": True, "count": len(CommentHandler.get_comments(video_id))}, 200)
+                else:
+                    self._send_json({"error": "videoId and text required"}, 400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
         """Get direct video URL from a YouTube URL using yt-dlp."""
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -368,3 +413,48 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# COMMENT ENDPOINTS (added for FloView)
+COMMENT_FILE = "/tmp/floview-comments.json"
+
+class CommentHandler:
+    @staticmethod
+    def is_signed_in(headers):
+        # Check for auth token in headers (set by FloView when signed in)
+        auth = headers.get("Cookie") or headers.get("Authorization") or ""
+        # Simple check: if user has 'floview_auth' cookie/token, they're signed in
+        # For now: require ANY Authorization header or specific cookie set by frontend
+        return "floview-auth" in auth.lower() or "authorization" in auth.lower()
+
+    @staticmethod
+    def save_comment(video_id, text, user):
+        try:
+            comments = {}
+            try:
+                with open(COMMENT_FILE, "r") as f:
+                    comments = json.load(f)
+            except:
+                pass
+            if video_id not in comments:
+                comments[video_id] = []
+            comments[video_id].append({
+                "user": user or "Anonymous",
+                "text": text[:500],  # cap length
+                "time": int(__import__('time').time())
+            })
+            with open(COMMENT_FILE, "w") as f:
+                json.dump(comments, f)
+            return True
+        except Exception as e:
+            print(f"[comment] save error: {e}")
+            return False
+
+    @staticmethod
+    def get_comments(video_id):
+        try:
+            with open(COMMENT_FILE, "r") as f:
+                comments = json.load(f)
+            return comments.get(video_id, [])
+        except:
+            return []
